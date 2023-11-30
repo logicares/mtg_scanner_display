@@ -1,52 +1,69 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:camera/camera.dart';
-import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 
-void main() async {
+
+Future<void> main() async {
+  // Ensure that plugin services are initialized so that `availableCameras()`
+  // can be called before `runApp()`
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(MyApp());
+
+  // Obtain a list of the available cameras on the device.
+  final cameras = await availableCameras();
+
+  // Get a specific camera from the list of available cameras.
+  final firstCamera = cameras.first;
+
+  runApp(
+    MaterialApp(
+      theme: ThemeData.dark(),
+      home: TakePictureScreen(
+        // Pass the appropriate camera to the TakePictureScreen widget.
+        camera: firstCamera,
+      ),
+    ),
+  );
 }
 
-class MyApp extends StatelessWidget {
+// A screen that allows users to take a picture using a given camera.
+class TakePictureScreen extends StatefulWidget {
+  const TakePictureScreen({
+    super.key,
+    required this.camera,
+  });
+
+  final CameraDescription camera;
+
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      home: CameraScreen(),
-    );
-  }
+  TakePictureScreenState createState() => TakePictureScreenState();
 }
 
-class CameraScreen extends StatefulWidget {
-  @override
-  _CameraScreenState createState() => _CameraScreenState();
-}
-
-class _CameraScreenState extends State<CameraScreen> {
+class TakePictureScreenState extends State<TakePictureScreen> {
   late CameraController _controller;
   late Future<void> _initializeControllerFuture;
 
   @override
   void initState() {
     super.initState();
-    _initializeControllerFuture = _initializeCamera();
-  }
-
-  Future<void> _initializeCamera() async {
-    final cameras = await availableCameras();
-    final firstCamera = cameras.first;
-
+    // To display the current output from the Camera,
+    // create a CameraController.
     _controller = CameraController(
-      firstCamera,
+      // Get a specific camera from the list of available cameras.
+      widget.camera,
+      // Define the resolution to use.
       ResolutionPreset.medium,
     );
 
-    return _controller.initialize();
+    // Next, initialize the controller. This returns a Future.
+    _initializeControllerFuture = _controller.initialize();
   }
 
   @override
   void dispose() {
+    // Dispose of the controller when the widget is disposed.
     _controller.dispose();
     super.dispose();
   }
@@ -54,73 +71,141 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Camera App'),
-      ),
+      appBar: AppBar(title: const Text('Take a picture')),
+      // You must wait until the controller is initialized before displaying the
+      // camera preview. Use a FutureBuilder to display a loading spinner until the
+      // controller has finished initializing.
       body: FutureBuilder<void>(
         future: _initializeControllerFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.done) {
+            // If the Future is complete, display the preview.
             return CameraPreview(_controller);
           } else {
-            return Center(child: CircularProgressIndicator());
+            // Otherwise, display a loading indicator.
+            return const Center(child: CircularProgressIndicator());
           }
         },
       ),
       floatingActionButton: FloatingActionButton(
+        // Provide an onPressed callback.
         onPressed: () async {
+          // Take the Picture in a try / catch block. If anything goes wrong,
+          // catch the error.
           try {
+            // Ensure that the camera is initialized.
             await _initializeControllerFuture;
 
-            final XFile image = await _controller.takePicture();
+            // Attempt to take a picture and get the file `image`
+            // where it was saved.
+            final image = await _controller.takePicture();
 
-            // Display the captured image in the app
-            _navigateToDisplayPictureScreen(context, image.path);
+            if (!mounted) return;
+
+            // If the picture was taken, display it on a new screen.
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => DisplayPictureScreen(
+                  // Pass the automatically generated path to
+                  // the DisplayPictureScreen widget.
+                  imagePath: image.path,
+                ),
+              ),
+            );
           } catch (e) {
-            print("Error taking picture: $e");
+            // If an error occurs, log the error to the console.
+            print(e);
           }
         },
-        child: Icon(Icons.camera),
-      ),
-    );
-  }
-
-  void _navigateToDisplayPictureScreen(BuildContext context, String imagePath) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => DisplayPictureScreen(imagePath: imagePath),
+        child: const Icon(Icons.camera_alt),
       ),
     );
   }
 }
-
 class DisplayPictureScreen extends StatelessWidget {
   final String imagePath;
 
-  DisplayPictureScreen({required this.imagePath});
+  DisplayPictureScreen({Key? key, required this.imagePath}) : super(key: key);
+
+  Future<void> callPythonScript(String imagePath) async {
+    try {
+      final process = await Process.start(
+        'python',
+        ['C:/Users/paper/Desktop/MTGScan-main/main.py', imagePath],
+      );
+
+      final output = await process.stdout.transform(utf8.decoder).join();
+      print('Python script output: $output');
+
+      final exitCode = await process.exitCode;
+      print('Python script exited with code $exitCode');
+
+      // Parse the JSON output
+      final Map<String, dynamic> recognitionResult = json.decode(output);
+      print('Parsed JSON result: $recognitionResult');
+
+      // Access individual fields
+      final String cardName = recognitionResult['name'];
+      final String cardImageUrl = recognitionResult['image_url'];
+      final String cardDescription = recognitionResult['description'];
+
+      // Now you can use these values in your Flutter app as needed
+      print('Card Name: $cardName');
+      print('Card Image URL: $cardImageUrl');
+      print('Card Description: $cardDescription');
+    } catch (e) {
+      print('Error calling Python script: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Display Picture')),
-      body: Image.asset(File(imagePath) as String),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // Save the photo locally for later use
-          saveImageLocally(imagePath);
-          Navigator.pop(context); // Close the display picture screen
-        },
-        child: Icon(Icons.save),
+      appBar: AppBar(title: const Text('Display the Picture')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            kIsWeb
+                ? Image.network(imagePath) // Use Image.network for web
+                : Image.file(File(imagePath)),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                // Call Python script with the image path
+                callPythonScript(imagePath);
+              },
+              child: Text('Run Image Recognition'),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
 
-  Future<void> saveImageLocally(String imagePath) async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final fileName = path.basename(imagePath);
-    final savedImage = File('${appDir.path}/$fileName');
-    await File(imagePath).copy(savedImage.path);
-    print('Image saved locally: ${savedImage.path}');
+
+
+
+
+
+
+
+
+// A widget that displays the picture taken by the user.
+/* class DisplayPictureScreen extends StatelessWidget {
+  final String imagePath;
+
+  const DisplayPictureScreen({super.key, required this.imagePath});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Display the Picture')),
+      // The image is stored as a file on the device. Use the `Image.file`
+      // constructor with the given path to display the image.
+      body: Image.file(File(imagePath)),
+    );
   }
 }
+ */
